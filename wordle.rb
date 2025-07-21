@@ -2,8 +2,13 @@
 #
 # For now, with a double letter where one is yellow and the other gray,
 # enter yellow as the outcome for both
+#
+# Example usage:
+# ./wordle.rb crane-..... sloth-..y.. opium-y.g.g (answer is "idiom")
 alphabet = (97..122).map(&:chr)
 $available = (0..4).map { alphabet.dup }
+
+$required = []
 
 def go(word, outcome)
   (0..4).each do |i|
@@ -21,6 +26,7 @@ def go(word, outcome)
       av << w
     when 'y'
       av.delete(w)
+      $required << w unless $required.include?(w)
     else raise "Unexpected char in outcome '#{outcome}': '#{o}'"
     end
   end
@@ -35,6 +41,14 @@ ARGV.each do |arg|
 end
 
 segs = $available.map { |av| av.size == 1 ? av.first : (['['] + av + [']']).join('') }.join('')
-pat = "^#{segs}$"
+pat = Regexp.new("^#{segs}$")
 puts("Searching for: #{pat}")
-system('/usr/bin/grep', pat, '/home/ec2-user/words/wordle-words.txt')
+puts("Required: #{$required.inspect}")
+
+all = File.read('/home/ec2-user/words/wordle-words.txt').split("\n")
+matches = all.grep(pat)
+$required.each do |req|
+  matches.keep_if { |word| word.include?(req) }
+end
+
+puts(matches.inspect)
