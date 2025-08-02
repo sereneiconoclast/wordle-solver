@@ -8,59 +8,61 @@
 # Then make another guess, rerun the program and add another word and its
 # outcome to narrow the field of possibilities further.
 #
-# For now, with a double letter where one is yellow and the other gray,
-# enter yellow as the outcome for both. If one is green and the other gray,
-# enter green and yellow.
-#
 # Example usage:
 # ./wordle.rb crane-..... sloth-..y.. opium-y.g.g (answer is "idiom")
 #
-# TODO, part 1: Keep track of how many occurrences of each letter are
-# possible, e.g.:
-# {
-#   'a' => (0..3), # I don't think any word has more than 3 of the same letter
-#   'b' => (0..3),
-#   'c' => (0..3),
-#   ...
-# }
-#
-# When a gray letter shows up, set the range to (0..0).
-# More useful: Use this whenever one or more yellow letters show up.
-# Examine the outcome to control for how many of the letter might be there.
-# If there's only one occurrence and it's yellow, zero is eliminated so
-# change the range to (1..3).
-# If there are two occurrences, one yellow and one gray, then the range is
-# just (1..1) - this is also the case if one is green and one gray.
-# If there are two and they're both yellow (or green), the range is (2..3).
-# If there are three and two are yellow (or green), it's (2..2).
-# If there are three and they're all yellow... well that's impossible.
-#
-# TODO, part 2: Examine the possible dictionary matches after filtering,
+# TODO: Examine the possible dictionary matches after filtering,
 # and do the bucketing analysis used by NYTimes's WordleBot.
-alphabet = (97..122).map(&:chr)
-$available = (0..4).map { alphabet.dup }
+alphabet = ('a'..'z').to_a
 
-$required = []
+# For each letter, the smallest or largest number of times it might appear
+# in the entire word
+# $occurrences['g'] => (0..3)
+$occurrences = Hash[
+  alphabet.map { |let| [let, (0..3)] }
+]
+
+# For a given position, the possible letters it might contain
+# $positions[2] => ['a', 'b', 'd', ... 'z']
+$positions = (0..4).map { alphabet.dup }
 
 def go(word, outcome)
-  (0..4).each do |i|
-    av = $available[i]
-    w = word[i..i]
-    o = outcome[i..i]
-    case o
-    when '.' # Gray - letter appears in none of the 5 positions
-      # TODO: Deal with double letter having one gray outcome, one yellow
-      # This "completely rule out the letter" logic only works when every
-      # occurrence of the letter in the guess is gray (which is usually
-      # because the letter only occurs once)
-      $available.each { |av2| av2.delete(w) }
-    when 'g' # Green - letter is definitely in this position
-      av.clear
-      av << w
-    when 'y'
-      av.delete(w)
-      $required << w unless $required.include?(w)
-    else raise "Unexpected char in outcome '#{outcome}': '#{o}'"
+  # (0..4).group_by { |p| 'nanny'[p] } => {"n"=>[0, 2, 3], "a"=>[1], "y"=>[4]}
+  letter_counts = (0..4).group_by { |p| word[p] }
+
+  letter_counts.each_pair do |letter, positions| # 'n', [0, 2, 3]
+    count_in_guess = positions.size # 1..3
+    outcomes = positions.map { |pos| [pos, outcome[pos]] } # [[0, '.'], [2, 'y'], [3, '.']]
+
+    gray_count = outcomes.count { |r| r.last == '.' }
+    if gray_count > 0
+      # With at least one gray, we know exactly how many of that letter are in the word
+      exact_count = count_in_guess - gray_count # 3 N's, 2 are gray: max_count = 1
+    else
+      # If there are no gray outcomes, we only know there are _at least_ that many
+      min_count = count_in_guess
+    end
+
+    # Apply new information about increased minimum count or decreased maximum count
+    old_range = $occurrences[letter]
+    new_min = [old_range.min, (min_count || 0), (exact_count || 0)].max
+    new_max = [old_range.max, (exact_count || 3)].min
+    $occurrences[letter] = (new_min..new_max)
+
+    # With only gray outcomes, eliminate the letter from all consideration
+    if exact_count == 0
+      $positions.each { |pos| pos.delete(letter) }
+    end
+
+    outcomes.each do |(pos, an_outcome)|
+      case an_outcome
+      when 'g' # We absolutely know this letter is here, all other possibilites are removed
+        $positions[pos].clear
+        $positions[pos] << letter
+      when 'y', '.' # We only know the letter isn't here
+        $positions[pos].delete(letter)
+      else raise "Unexpected char in outcome '#{outcome}': '#{an_outcome}'"
+      end
     end
   end
 end
@@ -73,15 +75,24 @@ ARGV.each do |arg|
   go(word, outcome)
 end
 
-segs = $available.map { |av| av.size == 1 ? av.first : (['['] + av + [']']).join('') }.join('')
+# Construct a Regexp to filter out words with letters where we know they ain't
+# When there's just one possibility, simply state the letter
+# When there are more than one, construct a character class with square brackets
+segs = $positions.map { |av| av.size == 1 ? av.first : (['['] + av + [']']).join('') }.join('')
 pat = Regexp.new("^#{segs}$")
 puts("Searching for: #{pat}")
-puts("Required: #{$required.inspect}")
+puts("Required: #{$occurrences.inspect}")
 
 all = File.read('/home/ec2-user/words/wordle-words.txt').split("\n")
-matches = all.grep(pat)
-$required.each do |req|
-  matches.keep_if { |word| word.include?(req) }
+
+# First filter by the Regexp, then count letters and filter by $occurrences
+matches = all.grep(pat).keep_if do |word|
+  split_word = word.split('')
+  $occurrences.all? do |(letter, range)|
+    next true if range == (0..3) # matches everything, tells us nothing
+    letter_count = split_word.count { |lttr| lttr == letter }
+    range.include?(letter_count)
+  end
 end
 
 puts(matches.inspect)
